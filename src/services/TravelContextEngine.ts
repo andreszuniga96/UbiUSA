@@ -27,11 +27,15 @@ export interface PreTripContext {
 export interface InTripContext {
   date: string;
   city: string;
+  timeZone: string;
+  timeZoneAbbr: string;
   currentEvent: TimelineEvent | null;
   nextEvent: TimelineEvent | null;
+  allDayEvents: TimelineEvent[];
   meetingPoint: string;
   meetingPointAddress?: string;
   meetingPointCoords?: { lat: number; lng: number };
+  navigationUrl: string;
   leaveByMs: number | null;
   leaveByFormatted: string;
   transitEstimateMin: number;
@@ -40,9 +44,30 @@ export interface InTripContext {
   status: 'SAFE' | 'WATCH' | 'RISK' | 'CRITICAL';
   alerts: TravelAlert[];
   recommendedFood: CuratedFoodPlace[];
+  requiredBookings: {
+    code: string;
+    label: string;
+    status: string;
+    notes?: string;
+  }[];
+  isNocturnalTransition: boolean;
+  nocturnalNote?: string;
 }
 
 export class TravelContextEngine {
+  /**
+   * Obtiene la zona horaria IANA correspondiente a la ciudad
+   */
+  static getTimezoneForCity(city: string): { iana: string; abbr: string } {
+    const c = city.toLowerCase();
+    if (c.includes('cali') || c.includes('colombia')) {
+      return { iana: 'America/Bogota', abbr: 'COT' };
+    }
+    // Boston, Nueva York, Bayonne, Washington D.C., Orlando están en la costa este (Eastern Time)
+    // En octubre aplica Eastern Daylight Time (EDT, UTC-4)
+    return { iana: 'America/New_York', abbr: 'EDT' };
+  }
+
   /**
    * Evalúa el estado previo al viaje (Pre-Trip)
    */
@@ -133,7 +158,8 @@ export class TravelContextEngine {
     targetDate: string,
     simulatedTimeMs: number,
     events: TimelineEvent[],
-    alerts: TravelAlert[]
+    alerts: TravelAlert[] = [],
+    dismissedAlertIds: string[] = []
   ): InTripContext {
     // Filter events for targetDate
     const dayEvents = events
@@ -153,13 +179,17 @@ export class TravelContextEngine {
     else if (targetDate >= '2026-10-16' && targetDate <= '2026-10-24') city = 'Nueva York / Bayonne';
     else if (targetDate >= '2026-10-25') city = 'Orlando, FL';
 
+    const tzInfo = this.getTimezoneForCity(city);
+
     let currentEvent: TimelineEvent | null = null;
     let nextEvent: TimelineEvent | null = null;
 
     for (const ev of dayEvents) {
       if (!ev.localTime) continue;
       const evTime = new Date(`${ev.date}T${ev.localTime}`).getTime();
-      const assumedDuration = 2.5 * 3600000; // 2.5 hours
+      const assumedDuration = (ev as any).durationMinutes 
+        ? (ev as any).durationMinutes * 60000 
+        : 2.5 * 3600000; // 2.5 hours default
 
       if (simulatedTimeMs >= evTime && simulatedTimeMs < evTime + assumedDuration) {
         currentEvent = ev;
@@ -185,13 +215,31 @@ export class TravelContextEngine {
         meetingPointCoords = bundle.tour.meetingPointCoords;
       } else if ((nextEvent as any).meetingPoint) {
         meetingPoint = (nextEvent as any).meetingPoint;
+        meetingPointAddress = (nextEvent as any).meetingPointAddress || (nextEvent as any).location;
       } else if (nextEvent.type === 'flight') {
-        meetingPoint = `Aeropuerto de salida (${(nextEvent as any).segments?.[0]?.origin || 'Terminal'})`;
+        const seg = (nextEvent as any).segments?.[0];
+        meetingPoint = `Aeropuerto ${seg?.origin || 'Salida'}`;
+        meetingPointAddress = `${seg?.origin || 'Aeropuerto'}, Terminal de Salida`;
       } else if (nextEvent.type === 'accommodation') {
         meetingPoint = `Check-in: ${(nextEvent as any).city}`;
+        meetingPointAddress = (nextEvent as any).address || (nextEvent as any).city;
       } else if (nextEvent.type === 'transport') {
         meetingPoint = `Terminal: ${(nextEvent as any).origin}`;
+        meetingPointAddress = (nextEvent as any).origin;
+      } else if ((nextEvent as any).location) {
+        meetingPoint = (nextEvent as any).location;
+        meetingPointAddress = (nextEvent as any).location;
       }
+    }
+
+    // URL de navegación externa directa a Google Maps
+    let navigationUrl = 'https://www.google.com/maps';
+    if (meetingPointCoords) {
+      navigationUrl = `https://www.google.com/maps/dir/?api=1&destination=${meetingPointCoords.lat},${meetingPointCoords.lng}`;
+    } else if (meetingPointAddress) {
+      navigationUrl = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(meetingPointAddress)}`;
+    } else if (meetingPoint && meetingPoint !== 'Punto por confirmar') {
+      navigationUrl = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(meetingPoint + ' ' + city)}`;
     }
 
     // Transit & Timing calculation
@@ -211,6 +259,28 @@ export class TravelContextEngine {
       freeTimeMinutes = Math.max(0, Math.floor(diffToLeave / 60000));
     }
 
+    // Required bookings & documents for next event
+    const requiredBookings: { code: string; label: string; status: string; notes?: string }[] = [];
+    if (nextEvent) {
+      const rawCodes = (nextEvent as any).bookingCodes || [];
+      rawCodes.forEach((code: string) => {
+        requiredBookings.push({
+          code,
+          label: (nextEvent as any).title || nextEvent.type,
+          status: nextEvent.status,
+          notes: nextEvent.notes,
+        });
+      });
+      if (rawCodes.length === 0 && (nextEvent as any).provider) {
+        requiredBookings.push({
+          code: 'Sin código (Reserva por Nombre)',
+          label: (nextEvent as any).provider,
+          status: nextEvent.status,
+          notes: nextEvent.notes,
+        });
+      }
+    }
+
     // Risk analysis
     const transitPlan: TransitPlan = {
       id: 'plan-dyn',
@@ -222,31 +292,69 @@ export class TravelContextEngine {
       source: 'STATIC',
     };
 
-    const risk = TravelRiskEngine.analyze(currentEvent, nextEvent, transitPlan, simulatedTimeMs);
+    const immediateRisk = TravelRiskEngine.analyze(currentEvent, nextEvent, transitPlan, simulatedTimeMs);
+    const scheduleAlerts = TravelRiskEngine.analyzeScheduleCompatibility(dayEvents);
+    const nocturnalAlerts = TravelRiskEngine.analyzeNocturnalTransitions(targetDate);
+
+    // Nocturnal info flag
+    const isNocturnalTransition = nocturnalAlerts.length > 0;
+    const nocturnalNote = nocturnalAlerts[0]?.message;
+
+    // Combine alerts avoiding duplicates
+    const allCandidateAlerts: TravelAlert[] = [
+      ...immediateRisk.alerts,
+      ...scheduleAlerts,
+      ...nocturnalAlerts,
+      ...alerts.filter(a => a.relatedEntityId === nextEvent?.id)
+    ];
+
+    const uniqueAlertMap = new Map<string, TravelAlert>();
+    allCandidateAlerts.forEach(al => {
+      if (!uniqueAlertMap.has(al.id)) {
+        uniqueAlertMap.set(al.id, al);
+      }
+    });
+
+    // Filter out dismissed alerts
+    const finalAlerts = Array.from(uniqueAlertMap.values()).filter(
+      al => !dismissedAlertIds.includes(al.id)
+    );
 
     // Recommended food places based on city and free time
     const nearbyFoodCandidates = VERIFIED_FOOD_PLACES.filter(f => {
       const placeCity = f.city.toLowerCase();
       const currentCity = city.toLowerCase();
-      return placeCity.includes('new york') || placeCity.includes('boston') || currentCity.includes('orlando');
+      return (
+        (currentCity.includes('boston') && placeCity.includes('boston')) ||
+        (currentCity.includes('nueva york') && placeCity.includes('new york')) ||
+        (currentCity.includes('bayonne') && placeCity.includes('new york')) ||
+        (currentCity.includes('orlando') && placeCity.includes('orlando'))
+      );
     }).slice(0, 3);
 
     return {
       date: targetDate,
       city,
+      timeZone: tzInfo.iana,
+      timeZoneAbbr: tzInfo.abbr,
       currentEvent,
       nextEvent,
+      allDayEvents: dayEvents,
       meetingPoint,
       meetingPointAddress,
       meetingPointCoords,
+      navigationUrl,
       leaveByMs,
       leaveByFormatted,
       transitEstimateMin,
       marginMin,
       freeTimeMinutes,
-      status: risk.status,
-      alerts: [...risk.alerts, ...alerts.filter(a => a.relatedEntityId === nextEvent?.id)],
+      status: immediateRisk.status,
+      alerts: finalAlerts,
       recommendedFood: nearbyFoodCandidates,
+      requiredBookings,
+      isNocturnalTransition,
+      nocturnalNote,
     };
   }
 }

@@ -2,7 +2,7 @@ import { db } from './db';
 import { parseTripData, ParsedTripBundle } from './seed/parser';
 import { 
   TimelineEvent, Task, Flight, Accommodation, Activity, TransportLeg, 
-  Tour, TourStop, TourSession, Place, TravelAlert, Document, DayPlan 
+  Tour, TourStop, TourSession, Place, TravelAlert, Document, DayPlan, Expense 
 } from '../domain/types';
 import { TripDataIntegrityChecker } from './TripDataIntegrityChecker';
 
@@ -234,5 +234,89 @@ export class TripRepository {
   static async getDays(): Promise<DayPlan[]> {
     const days = await db.days.toArray();
     return days.sort((a, b) => a.date.localeCompare(b.date));
+  }
+
+  // === Gestión de Alertas y Descarte Informativo ===
+  static async getDismissedAlertIds(): Promise<string[]> {
+    const record = await db.meta.get('dismissedAlerts');
+    return record?.value || [];
+  }
+
+  static async dismissAlert(alertId: string): Promise<void> {
+    const existing = await this.getDismissedAlertIds();
+    if (!existing.includes(alertId)) {
+      const updated = [...existing, alertId];
+      await db.meta.put({ key: 'dismissedAlerts', value: updated });
+    }
+  }
+
+  static async restoreAlert(alertId: string): Promise<void> {
+    const existing = await this.getDismissedAlertIds();
+    const updated = existing.filter(id => id !== alertId);
+    await db.meta.put({ key: 'dismissedAlerts', value: updated });
+  }
+
+  // === Gestión de Gastos y Presupuesto (P7) ===
+  static async getExpenses(): Promise<Expense[]> {
+    const list = await db.expenses.toArray();
+    return list.sort((a, b) => b.createdAt - a.createdAt);
+  }
+
+  static async addExpense(
+    expense: Omit<Expense, 'id' | 'createdAt' | 'updatedAt'>
+  ): Promise<Expense> {
+    const now = Date.now();
+    const newRecord: Expense = {
+      ...expense,
+      id: `exp-${now}-${Math.random().toString(36).slice(2, 6)}`,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    await db.transaction('rw', [db.expenses, db.syncQueue], async () => {
+      await db.expenses.put(newRecord);
+      await db.syncQueue.add({
+        collection: 'expenses',
+        docId: newRecord.id,
+        operation: 'set',
+        payload: newRecord,
+        status: 'PENDING',
+        timestamp: now,
+      });
+    });
+
+    return newRecord;
+  }
+
+  static async deleteExpense(id: string): Promise<void> {
+    await db.transaction('rw', [db.expenses, db.syncQueue], async () => {
+      await db.expenses.delete(id);
+      await db.syncQueue.add({
+        collection: 'expenses',
+        docId: id,
+        operation: 'delete',
+        payload: { id },
+        status: 'PENDING',
+        timestamp: Date.now(),
+      });
+    });
+  }
+
+  static async getTotalBudget(): Promise<number | null> {
+    const rec = await db.meta.get('totalBudget');
+    return rec ? Number(rec.value) : null;
+  }
+
+  static async setTotalBudget(amount: number): Promise<void> {
+    await db.meta.put({ key: 'totalBudget', value: amount });
+  }
+
+  static async getSyncStats(): Promise<{ lastSyncedAt: number | null; pendingCount: number }> {
+    const pendingCount = await db.syncQueue.where('status').equals('PENDING').count();
+    const lastSyncRec = await db.meta.get('lastSyncedAt');
+    return {
+      lastSyncedAt: lastSyncRec?.value || null,
+      pendingCount,
+    };
   }
 }

@@ -2,7 +2,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../data/db';
 import { 
   TimelineEvent, Task, Flight, Accommodation, Activity, TransportLeg, 
-  Tour, TourStop, TourSession, TravelAlert, Document, DayPlan, Place 
+  Tour, TourStop, TourSession, TravelAlert, Document, DayPlan, Place, Expense 
 } from '../domain/types';
 
 export function useTimelineEvents(): TimelineEvent[] {
@@ -164,5 +164,53 @@ export function usePlaces(): Place[] {
     },
     [],
     []
+  );
+}
+
+export function useExpenses(): Expense[] {
+  return useLiveQuery(
+    async () => {
+      const records = await db.expenses.toArray();
+      return records.sort((a, b) => b.createdAt - a.createdAt);
+    },
+    [],
+    []
+  );
+}
+
+export function useDismissedAlertIds(): string[] {
+  return useLiveQuery(
+    async () => {
+      const rec = await db.meta.get('dismissedAlerts');
+      return rec?.value || [];
+    },
+    [],
+    []
+  );
+}
+
+export function useTotalBudget(): number | null {
+  return useLiveQuery(
+    async () => {
+      const rec = await db.meta.get('totalBudget');
+      return rec ? Number(rec.value) : null;
+    },
+    [],
+    null
+  );
+}
+
+export function useSyncStats(): { lastSyncedAt: number | null; pendingCount: number } {
+  return useLiveQuery(
+    async () => {
+      const pendingCount = await db.syncQueue.where('status').equals('PENDING').count();
+      const lastSyncRec = await db.meta.get('lastSyncedAt');
+      return {
+        lastSyncedAt: lastSyncRec?.value || null,
+        pendingCount,
+      };
+    },
+    [],
+    { lastSyncedAt: null, pendingCount: 0 }
   );
 }

@@ -7,9 +7,26 @@ import { GoogleMapsProvider } from '../../services/GoogleMapsProvider';
 import { GoogleMapsLoader } from '../../services/GoogleMapsLoader';
 import { useTripStore } from '../../stores/useTripStore';
 import { 
-  MapPin, Camera, Compass, Coffee, 
-  CheckCircle2, Circle, Footprints, Play, Pause, Square, 
-  Sparkles, Utensils, ShieldCheck, ChevronRight 
+  MapPin, 
+  Camera, 
+  Compass, 
+  Coffee, 
+  CheckCircle2, 
+  Circle, 
+  Footprints, 
+  Play, 
+  Pause, 
+  Square, 
+  Sparkles, 
+  Utensils, 
+  ShieldCheck, 
+  ChevronRight,
+  ChevronLeft,
+  Navigation,
+  Copy,
+  Check,
+  BatteryCharging,
+  LocateFixed
 } from 'lucide-react';
 
 export default function TourMode() {
@@ -21,6 +38,8 @@ export default function TourMode() {
   const tourStops = useTourStops(id);
   const existingSession = useTourSession(id);
 
+  // GPS & Battery Management state (Consent based)
+  const [isGpsConsentGranted, setIsGpsConsentGranted] = useState<boolean>(false);
   const [position, setPosition] = useState<Position | null>(null);
   const [gpsError, setGpsError] = useState<string | null>(null);
 
@@ -28,6 +47,7 @@ export default function TourMode() {
   const [sessionStatus, setSessionStatus] = useState<'NOT_STARTED' | 'ACTIVE' | 'PAUSED' | 'COMPLETED'>('NOT_STARTED');
   const [completedStops, setCompletedStops] = useState<string[]>([]);
   const [showMap, setShowMap] = useState<boolean>(true);
+  const [copiedCode, setCopiedCode] = useState<string | null>(null);
 
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapProviderRef = useRef<GoogleMapsProvider | null>(null);
@@ -60,9 +80,9 @@ export default function TourMode() {
     });
   }, [tour, position]);
 
-  // GPS Tracking
+  // GPS Tracking: ONLY when session is ACTIVE and user granted explicit consent
   useEffect(() => {
-    if (sessionStatus === 'ACTIVE') {
+    if (sessionStatus === 'ACTIVE' && isGpsConsentGranted) {
       LocationService.watchPosition(
         (pos) => {
           setPosition(pos);
@@ -74,10 +94,13 @@ export default function TourMode() {
         }
       );
     } else {
+      // Battery saving: stop watching immediately when paused or consent disabled
       LocationService.stopWatching();
     }
-    return () => LocationService.stopWatching();
-  }, [sessionStatus]);
+    return () => {
+      LocationService.stopWatching();
+    };
+  }, [sessionStatus, isGpsConsentGranted]);
 
   // Embedded Map initialization
   useEffect(() => {
@@ -117,7 +140,7 @@ export default function TourMode() {
       });
 
       // Add user location marker
-      if (position) {
+      if (position && isGpsConsentGranted) {
         provider.addMarker({
           id: 'user-tour-pos',
           position: { lat: position.lat, lng: position.lng },
@@ -141,7 +164,7 @@ export default function TourMode() {
     return () => {
       isMounted = false;
     };
-  }, [isOnline, showMap, tourStops, currentStopIndex, position]);
+  }, [isOnline, showMap, tourStops, currentStopIndex, position, isGpsConsentGranted]);
 
   // Stop Actions
   const handleStartTour = () => {
@@ -181,14 +204,25 @@ export default function TourMode() {
     }
   };
 
+  const handleCopyCode = (code: string) => {
+    navigator.clipboard.writeText(code);
+    setCopiedCode(code);
+    setTimeout(() => setCopiedCode(null), 2500);
+  };
+
   const activeStop = tourStops[currentStopIndex] || tourStops[0];
   const nextStop = currentStopIndex < tourStops.length - 1 ? tourStops[currentStopIndex + 1] : null;
 
   // Calculate distance in meters to active stop
   let distanceToActive = 0;
-  if (position && activeStop) {
+  if (position && activeStop && isGpsConsentGranted) {
     distanceToActive = LocationService.distanceTo(position.lat, position.lng, activeStop.lat, activeStop.lng);
   }
+
+  // Navigation URL for the active stop
+  const navigationUrl = activeStop 
+    ? `https://www.google.com/maps/dir/?api=1&destination=${activeStop.lat},${activeStop.lng}`
+    : 'https://www.google.com/maps';
 
   if (!tour && tourStops.length === 0) {
     return (
@@ -203,17 +237,18 @@ export default function TourMode() {
   }
 
   const progressPercent = tourStops.length > 0 ? Math.round((completedStops.length / tourStops.length) * 100) : 0;
+  const bookingCode = tour?.bookingCodes?.[0];
 
   return (
-    <div className="pb-28 bg-gray-50 min-h-screen">
+    <div className="pb-32 bg-gray-50 min-h-screen">
       {/* Hero Header */}
       <div className="bg-gray-900 text-white p-6 pb-10 rounded-b-[2.5rem] shadow-xl relative overflow-hidden">
-        <div className="absolute top-0 right-0 w-72 h-72 bg-indigo-500/20 rounded-full blur-3xl"></div>
+        <div className="absolute top-0 right-0 w-72 h-72 bg-indigo-500/20 rounded-full blur-3xl pointer-events-none"></div>
 
         <div className="relative z-10">
           <div className="flex justify-between items-center mb-4">
             <Link to="/" className="text-gray-400 hover:text-white text-xs font-bold uppercase tracking-widest flex items-center gap-1 transition-colors">
-              ← Salir del Modo Tour
+              ← Salir al Copiloto
             </Link>
             <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide border ${
               sessionStatus === 'ACTIVE' 
@@ -224,11 +259,6 @@ export default function TourMode() {
             }`}>
               {sessionStatus === 'ACTIVE' ? 'EN VIVO' : sessionStatus === 'COMPLETED' ? 'FINALIZADO' : 'PREPARADO'}
             </span>
-            {gpsError && (
-              <span className="text-[10px] text-amber-300 bg-amber-900/40 px-2 py-0.5 rounded-md">
-                {gpsError}
-              </span>
-            )}
           </div>
 
           <div className="flex justify-between items-start">
@@ -252,9 +282,9 @@ export default function TourMode() {
             {sessionStatus === 'NOT_STARTED' && (
               <button
                 onClick={handleStartTour}
-                className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold py-3 px-4 rounded-xl text-sm flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/30 transition-all"
+                className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold py-3.5 px-4 rounded-2xl text-sm flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/30 transition-all active:scale-98"
               >
-                <Play size={16} fill="white" /> INICIAR TOUR EN VIVO
+                <Play size={16} fill="white" /> INICIAR TOUR EN RUTA
               </button>
             )}
 
@@ -262,13 +292,13 @@ export default function TourMode() {
               <>
                 <button
                   onClick={handlePauseTour}
-                  className="flex-1 bg-amber-600 hover:bg-amber-700 text-white font-bold py-2.5 px-3 rounded-xl text-xs flex items-center justify-center gap-1.5 transition-colors"
+                  className="flex-1 bg-amber-600 hover:bg-amber-700 text-white font-bold py-3 px-3 rounded-2xl text-xs flex items-center justify-center gap-1.5 transition-colors"
                 >
-                  <Pause size={14} /> Pausar
+                  <Pause size={15} /> Pausar
                 </button>
                 <button
                   onClick={handleFinishTour}
-                  className="flex-1 bg-gray-800 hover:bg-gray-700 text-gray-300 font-bold py-2.5 px-3 rounded-xl text-xs flex items-center justify-center gap-1.5 transition-colors"
+                  className="flex-1 bg-gray-800 hover:bg-gray-700 text-gray-300 font-bold py-3 px-3 rounded-2xl text-xs flex items-center justify-center gap-1.5 transition-colors"
                 >
                   <Square size={14} /> Finalizar
                 </button>
@@ -278,22 +308,57 @@ export default function TourMode() {
             {sessionStatus === 'PAUSED' && (
               <button
                 onClick={handleResumeTour}
-                className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold py-3 px-4 rounded-xl text-sm flex items-center justify-center gap-2 shadow-md transition-all"
+                className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold py-3 px-4 rounded-2xl text-sm flex items-center justify-center gap-2 shadow-md transition-all active:scale-98"
               >
                 <Play size={16} fill="white" /> Reanudar Tour
               </button>
             )}
 
             {sessionStatus === 'COMPLETED' && (
-              <div className="flex-1 bg-emerald-500/20 text-emerald-300 p-2.5 rounded-xl text-xs font-bold text-center border border-emerald-500/30">
-                ¡Has completado este tour! 🎉
+              <div className="flex-1 bg-emerald-500/20 text-emerald-300 p-2.5 rounded-2xl text-xs font-bold text-center border border-emerald-500/30">
+                ¡Has completado este tour con éxito! 🎉
               </div>
             )}
           </div>
         </div>
       </div>
 
-      <div className="px-4 -mt-4 relative z-20 space-y-4">
+      <div className="px-4 -mt-4 relative z-20 space-y-4 max-w-2xl mx-auto">
+        {/* GPS Consent & Battery Banner */}
+        <div className="bg-white p-3.5 rounded-2xl shadow-sm border border-gray-100 flex items-center justify-between gap-3 text-xs">
+          <div className="flex items-center gap-2">
+            <BatteryCharging size={16} className={isGpsConsentGranted ? 'text-indigo-600' : 'text-emerald-600'} />
+            <div>
+              <span className="font-bold text-gray-800 block">
+                {isGpsConsentGranted ? 'Seguimiento GPS Activo' : 'Modo Manual (Ahorro Batería)'}
+              </span>
+              <span className="text-[10px] text-gray-500">
+                {isGpsConsentGranted 
+                  ? 'Calculando distancia a pie en tiempo real' 
+                  : 'GPS apagado. Avanza de parada manualmente.'}
+              </span>
+            </div>
+          </div>
+
+          <button
+            onClick={() => setIsGpsConsentGranted(!isGpsConsentGranted)}
+            className={`px-3 py-1.5 rounded-xl font-bold text-[11px] transition-colors flex items-center gap-1 ${
+              isGpsConsentGranted
+                ? 'bg-rose-50 text-rose-700 hover:bg-rose-100'
+                : 'bg-indigo-50 text-indigo-700 hover:bg-indigo-100'
+            }`}
+          >
+            <LocateFixed size={12} />
+            {isGpsConsentGranted ? 'Desactivar GPS' : 'Activar GPS'}
+          </button>
+        </div>
+
+        {gpsError && isGpsConsentGranted && (
+          <div className="bg-amber-50 border border-amber-200 text-amber-900 p-3 rounded-2xl text-xs font-medium">
+            ⚠️ {gpsError} Puedes seguir el tour en modo manual con los botones de abajo.
+          </div>
+        )}
+
         {/* Progress & Stops Selector Bar */}
         <div className="bg-white p-4 rounded-3xl shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-gray-100">
           <div className="flex justify-between items-center text-xs font-bold text-gray-500 mb-3 px-1">
@@ -353,7 +418,7 @@ export default function TourMode() {
               {!isOnline && (
                 <div className="absolute inset-0 bg-gray-50/90 flex flex-col items-center justify-center p-4 text-center">
                   <p className="text-xs font-bold text-gray-600">Mapa online no disponible offline.</p>
-                  <p className="text-[11px] text-gray-400 mt-1">Sigue las instrucciones preparadas y distancias GPS abajo.</p>
+                  <p className="text-[11px] text-gray-400 mt-1">Sigue las instrucciones preparadas y distancias abajo.</p>
                 </div>
               )}
             </div>
@@ -363,8 +428,8 @@ export default function TourMode() {
         {/* Active Stop Card */}
         {activeStop && (
           <div className="space-y-4">
-            <section className="bg-white rounded-3xl p-6 shadow-sm border border-gray-100">
-              <div className="flex justify-between items-start gap-2 mb-3">
+            <section className="bg-white rounded-3xl p-6 shadow-sm border border-gray-100 space-y-4">
+              <div className="flex justify-between items-start gap-2">
                 <div>
                   <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-indigo-50 text-indigo-700 border border-indigo-100">
                     Parada {currentStopIndex + 1} de {tourStops.length}
@@ -374,7 +439,7 @@ export default function TourMode() {
                   </h2>
                 </div>
 
-                {position && (
+                {position && isGpsConsentGranted && (
                   <div className="bg-indigo-50 text-indigo-700 px-3 py-1.5 rounded-full text-xs font-bold whitespace-nowrap flex items-center gap-1.5 shrink-0">
                     <Footprints size={14} />
                     {Math.round(distanceToActive)} m
@@ -383,32 +448,76 @@ export default function TourMode() {
               </div>
 
               {activeStop.address && (
-                <p className="text-xs text-gray-500 flex items-center gap-1 mb-4">
-                  <MapPin size={12} className="text-gray-400 shrink-0" /> {activeStop.address}
+                <p className="text-xs text-gray-500 flex items-center gap-1">
+                  <MapPin size={13} className="text-gray-400 shrink-0" /> {activeStop.address}
                 </p>
               )}
 
-              <p className="text-gray-700 mb-6 text-sm leading-relaxed">
+              <p className="text-gray-700 text-sm leading-relaxed">
                 {activeStop.description}
               </p>
 
-              {/* Complete Stop Button */}
-              <div className="flex gap-2">
+              {/* Botones Grandes de Acción (Navegación + Marcar Visitada) */}
+              <div className="space-y-2 pt-2 border-t border-gray-100">
+                <a
+                  href={navigationUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs py-3.5 px-4 rounded-2xl flex items-center justify-center gap-2 shadow-md shadow-indigo-600/20 transition-all min-h-[48px]"
+                >
+                  <Navigation size={16} /> Abrir Ruta en Google Maps
+                </a>
+
                 <button
                   onClick={handleCompleteCurrentStop}
-                  className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-sm py-3 px-4 rounded-xl flex items-center justify-center gap-2 shadow-md shadow-emerald-600/20 transition-all"
+                  className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs py-3.5 px-4 rounded-2xl flex items-center justify-center gap-2 shadow-md shadow-emerald-600/20 transition-all min-h-[48px]"
                 >
                   <CheckCircle2 size={16} /> Marcar Parada como Visitada
                 </button>
               </div>
+
+              {/* Controles Manuales: Anterior y Siguiente Parada */}
+              <div className="flex gap-2 pt-1">
+                <button
+                  disabled={currentStopIndex === 0}
+                  onClick={() => setCurrentStopIndex(Math.max(0, currentStopIndex - 1))}
+                  className="flex-1 py-2.5 px-3 bg-gray-100 hover:bg-gray-200 disabled:opacity-40 text-gray-700 font-bold rounded-xl text-xs flex items-center justify-center gap-1 transition-colors"
+                >
+                  <ChevronLeft size={16} /> Anterior
+                </button>
+                <button
+                  disabled={currentStopIndex === tourStops.length - 1}
+                  onClick={() => setCurrentStopIndex(Math.min(tourStops.length - 1, currentStopIndex + 1))}
+                  className="flex-1 py-2.5 px-3 bg-gray-100 hover:bg-gray-200 disabled:opacity-40 text-gray-700 font-bold rounded-xl text-xs flex items-center justify-center gap-1 transition-colors"
+                >
+                  Siguiente <ChevronRight size={16} />
+                </button>
+              </div>
             </section>
+
+            {/* Código de reserva si existe */}
+            {bookingCode && (
+              <div className="bg-indigo-50 border border-indigo-100 rounded-3xl p-4 px-5 flex items-center justify-between">
+                <div>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-indigo-600">Código de Reserva</p>
+                  <p className="text-sm font-extrabold text-indigo-950 font-mono">{bookingCode}</p>
+                </div>
+                <button
+                  onClick={() => handleCopyCode(bookingCode)}
+                  className="px-3 py-1.5 bg-white text-indigo-600 rounded-xl text-xs font-bold shadow-xs flex items-center gap-1 hover:bg-indigo-100 transition-colors"
+                >
+                  {copiedCode === bookingCode ? <Check size={14} className="text-emerald-600" /> : <Copy size={14} />}
+                  Copiar
+                </button>
+              </div>
+            )}
 
             {/* Next Stop Preview */}
             {nextStop && (
-              <div className="bg-indigo-50 border border-indigo-100 rounded-3xl p-4 px-5 flex items-center justify-between">
+              <div className="bg-slate-100 border border-slate-200 rounded-3xl p-4 px-5 flex items-center justify-between">
                 <div>
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-indigo-600">Siguiente Parada</p>
-                  <p className="text-sm font-extrabold text-indigo-950">{nextStop.order}. {nextStop.name}</p>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Siguiente Parada</p>
+                  <p className="text-sm font-extrabold text-slate-900">{nextStop.order}. {nextStop.name}</p>
                 </div>
                 <button
                   onClick={() => setCurrentStopIndex(currentStopIndex + 1)}
@@ -473,15 +582,15 @@ export default function TourMode() {
               <div className="grid grid-cols-2 gap-2">
                 <button 
                   onClick={() => navigate(`/explorar/nearby?category=cafe`)}
-                  className="bg-amber-50 hover:bg-amber-100 text-amber-800 py-3 rounded-2xl text-xs font-bold flex items-center justify-center gap-2 transition-colors"
+                  className="bg-amber-50 hover:bg-amber-100 text-amber-800 py-3 rounded-2xl text-xs font-bold flex items-center justify-center gap-2 transition-colors min-h-[44px]"
                 >
                   <Coffee size={16} /> Café Cerca
                 </button>
                 <button 
                   onClick={() => navigate(`/explorar/nearby?category=restaurant`)}
-                  className="bg-rose-50 hover:bg-rose-100 text-rose-800 py-3 rounded-2xl text-xs font-bold flex items-center justify-center gap-2 transition-colors"
+                  className="bg-emerald-50 hover:bg-emerald-100 text-emerald-800 py-3 rounded-2xl text-xs font-bold flex items-center justify-center gap-2 transition-colors min-h-[44px]"
                 >
-                  <Utensils size={16} /> Comida Cerca
+                  <Utensils size={16} /> Restaurante
                 </button>
               </div>
             </div>

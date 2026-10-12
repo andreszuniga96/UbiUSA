@@ -244,9 +244,28 @@ export interface Document {
 export interface TravelAlert {
   id: ID;
   type: 'SAFE' | 'WATCH' | 'RISK' | 'CRITICAL';
+  level?: 'INFO' | 'WATCH' | 'CRITICAL';
   message: string;
+  cause?: string;
+  recommendedAction?: string;
+  timeAvailableMin?: number;
+  category?: 'TIMING' | 'LOGISTICS' | 'RESERVATION' | 'WEATHER' | 'TRANSIT' | 'SECURITY';
+  dismissed?: boolean;
+  dismissedAt?: number;
   relatedEntityId?: ID;
   createdAt: number;
+}
+
+export interface Expense {
+  id: ID;
+  date: string; // YYYY-MM-DD
+  city: string;
+  category: 'Alojamiento' | 'Transporte' | 'Comida' | 'Entradas' | 'Compras' | 'Imprevistos' | 'Otros';
+  amountUsd: number;
+  paymentMethod?: 'Efectivo' | 'Tarjeta Crédito' | 'Tarjeta Débito' | 'Otro';
+  notes?: string;
+  createdAt: number;
+  updatedAt: number;
 }
 
 export interface WeatherSnapshot {

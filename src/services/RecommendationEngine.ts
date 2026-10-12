@@ -211,7 +211,7 @@ export const VERIFIED_FOOD_PLACES: CuratedFoodPlace[] = [
     id: 'food-orl-1',
     name: 'Earl of Sandwich (Disney Springs)',
     address: '1750 E Buena Vista Dr, Lake Buena Vista, FL 32830',
-    lat: 48.3708,
+    lat: 28.3708,
     lng: -81.5145,
     city: 'Orlando, FL',
     neighborhood: 'Disney Springs',
@@ -312,4 +312,176 @@ export class RecommendationEngine {
       };
     }).sort((a, b) => b.valueScore - a.valueScore);
   }
+
+  static getEssentialServices(
+    targetCategory?: string,
+    coords?: { lat: number; lng: number }
+  ): (CuratedEssentialService & { distanceMeters?: number })[] {
+    let list = VERIFIED_ESSENTIAL_SERVICES;
+    if (targetCategory && targetCategory !== 'ALL') {
+      list = list.filter(s => s.category === targetCategory);
+    }
+
+    if (!coords) return list;
+
+    return list.map(s => {
+      const R = 6371e3;
+      const dLat = (s.lat - coords.lat) * Math.PI / 180;
+      const dLon = (s.lng - coords.lng) * Math.PI / 180;
+      const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                Math.cos(coords.lat * Math.PI / 180) * Math.cos(s.lat * Math.PI / 180) *
+                Math.sin(dLon / 2) * Math.sin(dLon / 2);
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+      const distanceMeters = Math.round(R * c);
+
+      return { ...s, distanceMeters };
+    }).sort((a, b) => (a.distanceMeters || 0) - (b.distanceMeters || 0));
+  }
 }
+
+export interface CuratedEssentialService {
+  id: string;
+  name: string;
+  address: string;
+  lat: number;
+  lng: number;
+  city: string;
+  category: 'RESTROOM' | 'PHARMACY' | 'CONVENIENCE' | 'CAFE';
+  serviceType: 'Baño público' | 'Farmacia' | 'Tienda de conveniencia' | 'Café';
+  isFree?: boolean;
+  is24h?: boolean;
+  notes: string;
+  verificationSource: 'MUNICIPAL_VERIFIED' | 'CURATED' | 'OFFICIAL';
+}
+
+export const VERIFIED_ESSENTIAL_SERVICES: CuratedEssentialService[] = [
+  // Baños Públicos
+  {
+    id: 'rest-bos-1',
+    name: 'Baños Públicos Boston Common Visitor Center',
+    address: '139 Tremont St, Boston, MA 02111',
+    lat: 42.3553,
+    lng: -71.0637,
+    city: 'Boston, MA',
+    category: 'RESTROOM',
+    serviceType: 'Baño público',
+    isFree: true,
+    notes: 'Baño municipal gratuito verificado en el Centro de Información de Visitantes del parque.',
+    verificationSource: 'MUNICIPAL_VERIFIED',
+  },
+  {
+    id: 'rest-bos-2',
+    name: 'Baños Públicos Faneuil Hall / Quincy Market',
+    address: '4 S Market St, Boston, MA 02109',
+    lat: 42.3601,
+    lng: -71.0549,
+    city: 'Boston, MA',
+    category: 'RESTROOM',
+    serviceType: 'Baño público',
+    isFree: true,
+    notes: 'Baños públicos amplios en la planta baja del mercado central.',
+    verificationSource: 'CURATED',
+  },
+  {
+    id: 'rest-ny-1',
+    name: 'Baño Público de Bryant Park (Premiado)',
+    address: 'Calle 42 y Sexta Avenida, New York, NY 10018',
+    lat: 40.7536,
+    lng: -73.9832,
+    city: 'New York, NY',
+    category: 'RESTROOM',
+    serviceType: 'Baño público',
+    isFree: true,
+    notes: 'Famoso baño municipal de libre acceso con atención permanente, flores frescas y música clásica.',
+    verificationSource: 'MUNICIPAL_VERIFIED',
+  },
+  {
+    id: 'rest-ny-2',
+    name: 'Baños Públicos Grand Central Terminal',
+    address: '89 E 42nd St (Lower Level / Dining Concourse), New York, NY 10017',
+    lat: 40.7527,
+    lng: -73.9772,
+    city: 'New York, NY',
+    category: 'RESTROOM',
+    serviceType: 'Baño público',
+    isFree: true,
+    notes: 'Baños públicos limpios y verificados en el nivel inferior de la terminal.',
+    verificationSource: 'OFFICIAL',
+  },
+  {
+    id: 'rest-ny-3',
+    name: 'Baños de Castle Clinton / Battery Park',
+    address: 'Battery Park, New York, NY 10004',
+    lat: 40.7035,
+    lng: -74.0169,
+    city: 'New York, NY',
+    category: 'RESTROOM',
+    serviceType: 'Baño público',
+    isFree: true,
+    notes: 'Baño público del Servicio de Parques Nacionales antes de tomar el ferry a la Estatua de la Libertad.',
+    verificationSource: 'OFFICIAL',
+  },
+
+  // Farmacias y Tiendas de Conveniencia
+  {
+    id: 'pharma-bos-1',
+    name: 'CVS Pharmacy (Boylston / Copley)',
+    address: '587 Boylston St, Boston, MA 02116',
+    lat: 42.3506,
+    lng: -71.0768,
+    city: 'Boston, MA',
+    category: 'PHARMACY',
+    serviceType: 'Farmacia',
+    notes: 'Farmacia completa, medicamentos sin receta, bebidas y snacks.',
+    verificationSource: 'CURATED',
+  },
+  {
+    id: 'pharma-ny-1',
+    name: 'Duane Reade / Walgreens (Wall Street 24h)',
+    address: '40 Wall St, New York, NY 10005',
+    lat: 40.7071,
+    lng: -74.0097,
+    city: 'New York, NY',
+    category: 'PHARMACY',
+    serviceType: 'Farmacia',
+    is24h: true,
+    notes: 'Abierto 24 horas en el Distrito Financiero. Medicinas, agua y artículos de viaje.',
+    verificationSource: 'CURATED',
+  },
+  {
+    id: 'pharma-ny-2',
+    name: 'CVS Pharmacy (Times Square / Midtown)',
+    address: '1500 Broadway, New York, NY 10036',
+    lat: 40.7569,
+    lng: -73.9861,
+    city: 'New York, NY',
+    category: 'PHARMACY',
+    serviceType: 'Farmacia',
+    notes: 'Farmacia de paso amplio en Midtown Manhattan.',
+    verificationSource: 'CURATED',
+  },
+  {
+    id: 'conv-bay-1',
+    name: 'Walgreens Bayonne',
+    address: '1080 Broadway, Bayonne, NJ 07002',
+    lat: 40.6756,
+    lng: -74.1082,
+    city: 'Bayonne, NJ',
+    category: 'CONVENIENCE',
+    serviceType: 'Tienda de conveniencia',
+    notes: 'Muy conveniente cerca del alojamiento en Bayonne.',
+    verificationSource: 'CURATED',
+  },
+  {
+    id: 'conv-orl-1',
+    name: 'Walgreens Palm Parkway (Orlando)',
+    address: '12100 S Apopka Vineland Rd, Orlando, FL 32836',
+    lat: 28.3846,
+    lng: -81.5034,
+    city: 'Orlando, FL',
+    category: 'CONVENIENCE',
+    serviceType: 'Tienda de conveniencia',
+    notes: 'Farmacia y abastecimiento de agua y snacks para los parques de Disney y Universal.',
+    verificationSource: 'CURATED',
+  },
+];

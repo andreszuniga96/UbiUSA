@@ -43,4 +43,15 @@ describe('RecommendationEngine', () => {
       expect(results[i].valueScore).toBeGreaterThanOrEqual(results[i + 1].valueScore);
     }
   });
+
+  it('proporciona servicios esenciales verificados (baños públicos, farmacias 24h, tiendas)', () => {
+    const restrooms = RecommendationEngine.getEssentialServices('RESTROOM', { lat: 40.7536, lng: -73.9832 });
+    expect(restrooms.length).toBeGreaterThanOrEqual(3);
+    expect(restrooms[0].category).toBe('RESTROOM');
+    expect(restrooms[0].distanceMeters).toBeDefined();
+
+    const pharmacies = RecommendationEngine.getEssentialServices('PHARMACY', { lat: 40.7071, lng: -74.0097 });
+    expect(pharmacies.length).toBeGreaterThanOrEqual(2);
+    expect(pharmacies[0].category).toBe('PHARMACY');
+  });
 });

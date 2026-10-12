@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useTripStore } from '../../stores/useTripStore';
 import { useTimelineEvents, useTours } from '../../hooks/useTripData';
@@ -11,7 +11,8 @@ import { Place } from '../../domain/types';
 import { VERIFIED_TOURS_DATA } from '../../data/seed/verifiedToursData';
 import { 
   Navigation, RefreshCw, AlertTriangle, 
-  WifiOff, ChevronDown, CheckCircle2, Info, Compass 
+  WifiOff, ChevronDown, CheckCircle2, Info, Compass,
+  MapPin, Copy, ExternalLink, List, Check
 } from 'lucide-react';
 
 export default function MapPage() {
@@ -33,6 +34,8 @@ export default function MapPage() {
   );
   const [diagnosticInfo, setDiagnosticInfo] = useState<GoogleMapsDiagnosticInfo | null>(null);
   const [showDiagModal, setShowDiagModal] = useState(false);
+  const [showPointsModal, setShowPointsModal] = useState(false);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
 
   const [userPosition, setUserPosition] = useState<Position | null>(null);
   const [isLocating, setIsLocating] = useState(false);
@@ -112,6 +115,87 @@ export default function MapPage() {
     };
   }, [initMap]);
 
+  // Context & Markers evaluation
+  const activeContext = useMemo(() => {
+    let filteredEvents = events;
+    if (selectedDate !== 'ALL') {
+      filteredEvents = events.filter(e => e.date === selectedDate);
+    }
+
+    return MapContextEngine.evaluate({
+      currentDate: selectedDate !== 'ALL' ? selectedDate : undefined,
+      currentLocation: userPosition ? { lat: userPosition.lat, lng: userPosition.lng } : null,
+      selectedTourId: selectedTourId !== 'ALL' ? selectedTourId : undefined,
+      dayEvents: filteredEvents,
+      allTours,
+      activeCategoryFilter: selectedLayer,
+    });
+  }, [events, selectedDate, userPosition, selectedTourId, allTours, selectedLayer]);
+
+  const activeMarkers = useMemo(() => {
+    return activeContext.markers.filter(m => {
+      if (selectedLayer === 'ALL') return true;
+      if (selectedLayer === 'TOURS') return m.type === 'TOUR_STOP' || m.type === 'MEETING_POINT';
+      if (selectedLayer === 'ACCOMMODATION') return m.type === 'ACCOMMODATION';
+      if (selectedLayer === 'TRANSPORT') return m.type === 'TRANSIT';
+      return true;
+    });
+  }, [activeContext, selectedLayer]);
+
+  // Helper to resolve Place object from marker
+  const resolvePlaceFromMarker = useCallback((m: typeof activeMarkers[0]): Place => {
+    for (const bundle of Object.values(VERIFIED_TOURS_DATA)) {
+      const stop = bundle.stops.find(s => s.id === m.id);
+      if (stop) {
+        return {
+          id: stop.id,
+          name: stop.name,
+          address: stop.address,
+          lat: stop.lat,
+          lng: stop.lng,
+          precision: 'exacto',
+          source: stop.source as any,
+          category: `Parada ${stop.order} · ${bundle.tour.title}`,
+          description: stop.description,
+          history: stop.history,
+          highlights: stop.whatToSee,
+          funFact: stop.funFact,
+          photoTip: stop.photoTip,
+        };
+      }
+
+      if (m.type === 'MEETING_POINT' && bundle.tour.id === m.entityId) {
+        return bundle.meetingPointPlace;
+      }
+    }
+
+    return {
+      id: m.id,
+      name: m.title,
+      address: m.subtitle,
+      lat: m.position.lat,
+      lng: m.position.lng,
+      precision: 'exacto',
+      source: 'CURATED',
+      category: m.type,
+    };
+  }, []);
+
+  const handleSelectMarker = useCallback((m: typeof activeMarkers[0]) => {
+    const placeMatch = resolvePlaceFromMarker(m);
+    setSelectedPlace(placeMatch);
+
+    if (userPosition) {
+      const dist = LocationService.distanceTo(
+        userPosition.lat, userPosition.lng,
+        placeMatch.lat, placeMatch.lng
+      );
+      setSelectedPlaceDistance(dist);
+    } else {
+      setSelectedPlaceDistance(undefined);
+    }
+  }, [resolvePlaceFromMarker, userPosition]);
+
   // Update Markers & Viewport based on selected context
   useEffect(() => {
     const provider = providerRef.current;
@@ -120,107 +204,27 @@ export default function MapPage() {
     provider.clearMarkers();
     provider.clearRoute();
 
-    // Filter events
-    let filteredEvents = events;
-    if (selectedDate !== 'ALL') {
-      filteredEvents = events.filter(e => e.date === selectedDate);
-    }
-
-    const context = MapContextEngine.evaluate({
-      currentDate: selectedDate !== 'ALL' ? selectedDate : undefined,
-      currentLocation: userPosition ? { lat: userPosition.lat, lng: userPosition.lng } : null,
-      selectedTourId: selectedTourId !== 'ALL' ? selectedTourId : undefined,
-      dayEvents: filteredEvents,
-      allTours,
-      activeCategoryFilter: selectedLayer,
-    });
-
-    // Apply layer filter
-    const activeMarkers = context.markers.filter(m => {
-      if (selectedLayer === 'ALL') return true;
-      if (selectedLayer === 'TOURS') return m.type === 'TOUR_STOP' || m.type === 'MEETING_POINT';
-      if (selectedLayer === 'ACCOMMODATION') return m.type === 'ACCOMMODATION';
-      if (selectedLayer === 'TRANSPORT') return m.type === 'TRANSIT';
-      return true;
-    });
-
     // Add markers with click listener to open PlaceDetailCard
     activeMarkers.forEach(m => {
       provider.addMarker({
         ...m,
-        clickAction: () => {
-          // Find matching Place
-          let placeMatch: Place | null = null;
-
-          // Check if it's a tour stop
-          for (const bundle of Object.values(VERIFIED_TOURS_DATA)) {
-            const stop = bundle.stops.find(s => s.id === m.id);
-            if (stop) {
-              placeMatch = {
-                id: stop.id,
-                name: stop.name,
-                address: stop.address,
-                lat: stop.lat,
-                lng: stop.lng,
-                precision: 'exacto',
-                source: stop.source as any,
-                category: `Parada ${stop.order} · ${bundle.tour.title}`,
-                description: stop.description,
-                history: stop.history,
-                highlights: stop.whatToSee,
-                funFact: stop.funFact,
-                photoTip: stop.photoTip,
-              };
-              break;
-            }
-
-            if (m.type === 'MEETING_POINT' && bundle.tour.id === m.entityId) {
-              placeMatch = bundle.meetingPointPlace;
-              break;
-            }
-          }
-
-          if (!placeMatch) {
-            placeMatch = {
-              id: m.id,
-              name: m.title,
-              address: m.subtitle,
-              lat: m.position.lat,
-              lng: m.position.lng,
-              precision: 'exacto',
-              source: 'CURATED',
-              category: m.type,
-            };
-          }
-
-          setSelectedPlace(placeMatch);
-
-          if (userPosition) {
-            const dist = LocationService.distanceTo(
-              userPosition.lat, userPosition.lng,
-              placeMatch.lat, placeMatch.lng
-            );
-            setSelectedPlaceDistance(dist);
-          } else {
-            setSelectedPlaceDistance(undefined);
-          }
-        }
+        clickAction: () => handleSelectMarker(m)
       });
     });
 
     // Draw route if present
-    if (context.routes && context.routes.length > 1) {
-      provider.drawRoute(context.routes);
+    if (activeContext.routes && activeContext.routes.length > 1) {
+      provider.drawRoute(activeContext.routes);
     }
 
     // Set viewport
     if (activeMarkers.length > 0) {
       provider.fitToMarkers();
     } else {
-      provider.setCenter(context.viewport.center.lat, context.viewport.center.lng);
-      provider.setZoom(context.viewport.zoom);
+      provider.setCenter(activeContext.viewport.center.lat, activeContext.viewport.center.lng);
+      provider.setZoom(activeContext.viewport.zoom);
     }
-  }, [mapLifecycleState, events, allTours, selectedDate, selectedTourId, selectedLayer, userPosition]);
+  }, [mapLifecycleState, activeMarkers, activeContext, handleSelectMarker]);
 
   // Handle GPS location request
   const handleLocateMe = async () => {
@@ -238,6 +242,16 @@ export default function MapPage() {
       setLocationError("No se pudo obtener la ubicación GPS (permiso denegado o timeout).");
     } finally {
       setIsLocating(false);
+    }
+  };
+
+  const copyToClipboard = async (text: string, id: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedId(id);
+      setTimeout(() => setCopiedId(null), 2000);
+    } catch (err) {
+      console.warn("Clipboard error", err);
     }
   };
 
@@ -274,6 +288,15 @@ export default function MapPage() {
           </div>
 
           <div className="flex items-center gap-1.5">
+            <button
+              onClick={() => setShowPointsModal(true)}
+              className="p-1.5 px-2.5 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-bold flex items-center gap-1 transition-colors"
+              title="Ver lista de puntos y coordenadas offline"
+            >
+              <List size={14} className="text-indigo-600" />
+              <span className="hidden sm:inline">Puntos ({activeMarkers.length})</span>
+            </button>
+
             <button
               onClick={() => { refreshDiagnostics(); setShowDiagModal(true); }}
               className="p-1.5 px-2.5 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-bold flex items-center gap-1 transition-colors"
@@ -380,24 +403,92 @@ export default function MapPage() {
           </div>
         )}
 
-        {/* Offline Overlay */}
+        {/* Offline Overlay with Itinerary Coordinates Fallback */}
         {!isOnline && (
-          <div className="absolute inset-0 bg-gray-50/90 backdrop-blur-sm flex flex-col items-center justify-center p-8 text-center z-10">
-            <div className="w-16 h-16 bg-orange-100 text-orange-600 rounded-3xl flex items-center justify-center mb-4 shadow-inner">
-              <WifiOff size={32} />
-            </div>
-            <h3 className="text-xl font-black text-gray-900 mb-2">Google Maps no está disponible sin conexión</h3>
-            <p className="text-sm text-gray-600 max-w-md leading-relaxed mb-6">
-              Para garantizar una experiencia honesta: Google Maps requiere conexión online para renderizar su cartografía oficial.
-              Puedes consultar tus rutas preparadas y las paradas de tours en el <strong>Modo Tour</strong> o en el <strong>Itinerario</strong>.
-            </p>
-            <div className="flex gap-3">
-              <button
-                onClick={() => navigate('/itinerario')}
-                className="bg-indigo-600 text-white font-bold px-5 py-2.5 rounded-xl text-sm shadow-md hover:bg-indigo-700 transition-colors"
-              >
-                Ver Itinerario Offline
-              </button>
+          <div className="absolute inset-0 bg-gray-50/95 backdrop-blur-sm flex flex-col p-4 sm:p-6 z-10 overflow-y-auto">
+            <div className="max-w-2xl mx-auto w-full space-y-4 my-auto">
+              <div className="text-center">
+                <div className="w-14 h-14 bg-orange-100 text-orange-600 rounded-3xl flex items-center justify-center mx-auto mb-3 shadow-inner">
+                  <WifiOff size={28} />
+                </div>
+                <h3 className="text-xl font-black text-gray-900 mb-1">Modo Offline: Cartografía de Google Maps no disponible</h3>
+                <p className="text-xs text-gray-600 max-w-md mx-auto leading-relaxed">
+                  Google Maps requiere conexión para cargar sus mapas vectoriales. Sin embargo, <strong>todas las coordenadas, direcciones y puntos de encuentro están 100% disponibles en tu dispositivo</strong>.
+                </p>
+              </div>
+
+              {/* Offline Place List */}
+              <div className="bg-white rounded-3xl border border-gray-200 p-4 shadow-sm space-y-3">
+                <div className="flex items-center justify-between pb-2 border-b border-gray-100">
+                  <span className="text-xs font-black text-gray-800 uppercase tracking-wider flex items-center gap-1.5">
+                    <MapPin size={14} className="text-indigo-600" />
+                    Puntos del Itinerario ({activeMarkers.length})
+                  </span>
+                  <button
+                    onClick={() => navigate('/itinerario')}
+                    className="text-xs font-bold text-indigo-600 hover:underline"
+                  >
+                    Ver Itinerario Completo →
+                  </button>
+                </div>
+
+                <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+                  {activeMarkers.map(m => (
+                    <div 
+                      key={m.id}
+                      className="bg-gray-50 hover:bg-indigo-50/50 rounded-2xl p-3 border border-gray-100 transition-colors flex flex-col gap-2"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <span className="text-[10px] font-extrabold text-indigo-600 uppercase">
+                            {m.type}
+                          </span>
+                          <h4 className="text-sm font-bold text-gray-900 leading-tight">
+                            {m.title}
+                          </h4>
+                          {m.subtitle && (
+                            <p className="text-xs text-gray-500 mt-0.5 line-clamp-1">
+                              {m.subtitle}
+                            </p>
+                          )}
+                        </div>
+
+                        <span className="text-[10px] font-mono text-gray-400 bg-white px-2 py-0.5 rounded border border-gray-100 shrink-0">
+                          {m.position.lat.toFixed(4)}, {m.position.lng.toFixed(4)}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-2 pt-1 border-t border-gray-200/50 text-[11px]">
+                        <button
+                          onClick={() => copyToClipboard(m.subtitle || m.title, `addr-${m.id}`)}
+                          className="font-bold text-gray-600 hover:text-gray-900 flex items-center gap-1 py-1 px-2 rounded-lg bg-white border border-gray-200"
+                        >
+                          {copiedId === `addr-${m.id}` ? <Check size={12} className="text-emerald-600" /> : <Copy size={12} />}
+                          <span>{copiedId === `addr-${m.id}` ? 'Copiada' : 'Copiar dirección'}</span>
+                        </button>
+
+                        <button
+                          onClick={() => copyToClipboard(`${m.position.lat}, ${m.position.lng}`, `coord-${m.id}`)}
+                          className="font-bold text-gray-600 hover:text-gray-900 flex items-center gap-1 py-1 px-2 rounded-lg bg-white border border-gray-200"
+                        >
+                          {copiedId === `coord-${m.id}` ? <Check size={12} className="text-emerald-600" /> : <Copy size={12} />}
+                          <span>{copiedId === `coord-${m.id}` ? 'Copiadas' : 'Copiar GPS'}</span>
+                        </button>
+
+                        <a
+                          href={`https://www.google.com/maps/dir/?api=1&destination=${m.position.lat},${m.position.lng}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="font-bold text-indigo-600 hover:text-indigo-800 flex items-center gap-1 ml-auto py-1 px-2 rounded-lg bg-indigo-50"
+                        >
+                          <ExternalLink size={12} />
+                          <span>Abrir mapa externo</span>
+                        </a>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
             </div>
           </div>
         )}
@@ -420,10 +511,16 @@ export default function MapPage() {
                 <RefreshCw size={15} /> Reintentar
               </button>
               <button
+                onClick={() => setShowPointsModal(true)}
+                className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-5 py-2.5 rounded-xl text-sm transition-colors flex items-center gap-1.5"
+              >
+                <List size={15} /> Ver Puntos y Coordenadas
+              </button>
+              <button
                 onClick={() => setShowDiagModal(true)}
                 className="bg-white hover:bg-rose-100 text-rose-900 border border-rose-300 font-bold px-5 py-2.5 rounded-xl text-sm transition-colors"
               >
-                Ver Diagnóstico Detallado
+                Diagnóstico
               </button>
             </div>
           </div>
@@ -451,6 +548,95 @@ export default function MapPage() {
           </div>
         )}
       </div>
+
+      {/* Points & Coordinates Modal (Accessible any time) */}
+      {showPointsModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
+          <div className="bg-white rounded-3xl max-w-xl w-full p-6 shadow-2xl border border-gray-100 max-h-[85vh] flex flex-col">
+            <div className="flex items-center justify-between pb-3 border-b border-gray-100 mb-3 shrink-0">
+              <h3 className="font-extrabold text-base text-gray-900 flex items-center gap-2">
+                <MapPin size={18} className="text-indigo-600" />
+                Puntos y Coordenadas Locales ({activeMarkers.length})
+              </h3>
+              <button 
+                onClick={() => setShowPointsModal(false)}
+                className="p-1.5 rounded-full hover:bg-gray-100 text-gray-500"
+              >
+                ✕
+              </button>
+            </div>
+
+            <p className="text-xs text-gray-500 mb-3 shrink-0">
+              Datos guardados en tu dispositivo. Puedes copiar las coordenadas o abrir la navegación externa hacia cualquier parada.
+            </p>
+
+            <div className="space-y-2.5 overflow-y-auto pr-1 flex-1">
+              {activeMarkers.map(m => (
+                <div 
+                  key={m.id}
+                  className="bg-gray-50 rounded-2xl p-3 border border-gray-200/80 flex flex-col gap-2"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <span className="text-[10px] font-extrabold text-indigo-600 uppercase">
+                        {m.type}
+                      </span>
+                      <h4 className="text-sm font-bold text-gray-900 leading-tight">
+                        {m.title}
+                      </h4>
+                      {m.subtitle && (
+                        <p className="text-xs text-gray-600 mt-0.5">
+                          {m.subtitle}
+                        </p>
+                      )}
+                    </div>
+                    <span className="text-[10px] font-mono text-gray-500 bg-white px-2 py-0.5 rounded border border-gray-200 shrink-0">
+                      {m.position.lat.toFixed(4)}, {m.position.lng.toFixed(4)}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-2 pt-1 border-t border-gray-200/50 text-[11px]">
+                    <button
+                      onClick={() => copyToClipboard(m.subtitle || m.title, `modal-addr-${m.id}`)}
+                      className="font-bold text-gray-700 flex items-center gap-1 py-1 px-2.5 rounded-lg bg-white border border-gray-200 hover:bg-gray-50"
+                    >
+                      {copiedId === `modal-addr-${m.id}` ? <Check size={12} className="text-emerald-600" /> : <Copy size={12} />}
+                      <span>{copiedId === `modal-addr-${m.id}` ? 'Copiada' : 'Copiar dirección'}</span>
+                    </button>
+
+                    <button
+                      onClick={() => copyToClipboard(`${m.position.lat}, ${m.position.lng}`, `modal-coord-${m.id}`)}
+                      className="font-bold text-gray-700 flex items-center gap-1 py-1 px-2.5 rounded-lg bg-white border border-gray-200 hover:bg-gray-50"
+                    >
+                      {copiedId === `modal-coord-${m.id}` ? <Check size={12} className="text-emerald-600" /> : <Copy size={12} />}
+                      <span>{copiedId === `modal-coord-${m.id}` ? 'Copiadas' : 'Copiar GPS'}</span>
+                    </button>
+
+                    <a
+                      href={`https://www.google.com/maps/dir/?api=1&destination=${m.position.lat},${m.position.lng}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="font-bold text-indigo-600 hover:text-indigo-800 flex items-center gap-1 ml-auto py-1 px-2.5 rounded-lg bg-indigo-50"
+                    >
+                      <ExternalLink size={12} />
+                      <span>Navegar</span>
+                    </a>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="pt-3 border-t border-gray-100 flex justify-end shrink-0 mt-3">
+              <button
+                onClick={() => setShowPointsModal(false)}
+                className="bg-gray-900 text-white font-bold px-4 py-2 rounded-xl text-xs"
+              >
+                Cerrar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Google Maps Diagnostic Modal */}
       {showDiagModal && (

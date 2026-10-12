@@ -61,4 +61,43 @@ describe('TravelContextEngine', () => {
     expect(result.marginMin).toBe(15);
     expect(result.recommendedFood.length).toBeGreaterThan(0);
   });
+
+  it('asigna correctamente las zonas horarias del viaje', () => {
+    expect(TravelContextEngine.getTimezoneForCity('Boston, MA').iana).toBe('America/New_York');
+    expect(TravelContextEngine.getTimezoneForCity('Nueva York / Bayonne').iana).toBe('America/New_York');
+    expect(TravelContextEngine.getTimezoneForCity('Orlando, FL').iana).toBe('America/New_York');
+    expect(TravelContextEngine.getTimezoneForCity('Cali, Colombia').iana).toBe('America/Bogota');
+  });
+
+  it('detecta transiciones nocturnas y genera URL de navegación válida', () => {
+    const result12 = TravelContextEngine.evaluateInTrip(
+      '2026-10-12',
+      new Date('2026-10-12T23:30:00').getTime(),
+      bundle.events,
+      bundle.alerts
+    );
+    expect(result12.isNocturnalTransition).toBe(true);
+    expect(result12.nocturnalNote).toContain('Cambridge');
+    expect(result12.navigationUrl).toContain('google.com/maps');
+  });
+
+  it('filtra alertas descartadas correctamente sin perder las activas', () => {
+    const date = '2026-10-13';
+    const timeMs = new Date('2026-10-13T09:00:00').getTime();
+
+    const normalResult = TravelContextEngine.evaluateInTrip(date, timeMs, bundle.events, bundle.alerts);
+    const alertToDismiss = normalResult.alerts[0];
+
+    if (alertToDismiss) {
+      const filteredResult = TravelContextEngine.evaluateInTrip(
+        date,
+        timeMs,
+        bundle.events,
+        bundle.alerts,
+        [alertToDismiss.id]
+      );
+      expect(filteredResult.alerts.some(a => a.id === alertToDismiss.id)).toBe(false);
+      expect(filteredResult.alerts.length).toBe(normalResult.alerts.length - 1);
+    }
+  });
 });

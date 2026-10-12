@@ -2,7 +2,7 @@ import Dexie, { Table } from 'dexie';
 import { 
   Trip, Traveler, DayPlan, TimelineEvent, Flight, Accommodation, Activity, TransportLeg, Tour,
   TourStop, TourSession, Place, Recommendation, RoutePlan, TransitPlan, Document, Task, 
-  TravelAlert, WeatherSnapshot, OfflineManifest 
+  TravelAlert, WeatherSnapshot, OfflineManifest, Expense 
 } from '../domain/types';
 
 export interface OutboxRecord {
@@ -44,6 +44,7 @@ export class TripDatabase extends Dexie {
   offlineManifest!: Table<OfflineManifest, string>;
   syncQueue!: Table<OutboxRecord, number>;
   meta!: Table<MetaRecord, string>;
+  expenses!: Table<Expense, string>;
 
   constructor() {
     super('usa_trip_companion');
@@ -77,6 +78,11 @@ export class TripDatabase extends Dexie {
       tours: 'id, date, activityId',
       tourSessions: 'id, tourId, activityId, status',
       places: 'id, category',
+    });
+
+    this.version(4).stores({
+      alerts: 'id, relatedEntityId, type, dismissed',
+      expenses: 'id, date, city, category',
     });
   }
 }

@@ -1,0 +1,39 @@
+# Dependencies
+node_modules/
+.pnp/
+.pnp.js
+
+# Production build & cache
+dist/
+dist-ssr/
+.cache/
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts
+vitest.config.js
+vitest.config.d.ts
+
+# Environment variables & secrets
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.env.*.local
+.env.*
+!.env.example
+
+# Local backups & scratch files
+.backup/
+scratch/
+
+# Testing & Coverage
+coverage/
+playwright-report/
+test-results/
+
+# OS and Editor
+.DS_Store
+Thumbs.db
+*.pem
+
